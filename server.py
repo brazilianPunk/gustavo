@@ -27,7 +27,7 @@ SUPABASE_BUCKET = "Rostos"
 REGISTERED_PATH = "capture (3).jpg"
 REGISTERED_NAME = "Gustavo"
 
-ESP32_CAM_URL = "http://192.168.1.11/stream"
+ESP32_CAM_URL = "  https://littlish-unbuying-kathyrn.ngrok-free.dev/stream"
 INTERVALO_SEGUNDOS = 2.0
 SIMILARITY_THRESHOLD = 0.65
 
