@@ -228,6 +228,38 @@ def toggle_reconhecimento():
         reconhecimento_manual = not reconhecimento_manual
         logging.info(f"Reconhecimento manual: {reconhecimento_manual}")
     return redirect(url_for('index'))
+    @app.route("/upload_frame", methods=["POST"])
+def upload_frame():
+    try:
+        # ler bytes da imagem enviada
+        file_bytes = np.frombuffer(request.data, np.uint8)
+        frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if frame is None:
+            logging.error("❌ Frame inválido recebido.")
+            return jsonify({"status": "erro", "mensagem": "frame inválido"}), 400
+
+        # processar reconhecimento facial
+        logging.info("📸 Frame recebido da ESP32-CAM.")
+        rep = DeepFace.represent(img_path=frame, model_name="Facenet", enforce_detection=False)[0]
+        emb = np.array(rep["embedding"], dtype=np.float32)
+
+        sim = np.dot(registered_embedding, emb) / (
+            np.linalg.norm(registered_embedding) * np.linalg.norm(emb) + 1e-10
+        )
+
+        if sim >= SIMILARITY_THRESHOLD:
+            msg = f"Acesso Permitido ({registered_name}) {sim:.2f}"
+            logging.info("✅ " + msg)
+        else:
+            msg = f"Desconhecido ({sim:.2f})"
+            logging.warning("🚨 " + msg)
+
+        return jsonify({"status": "ok", "mensagem": msg}), 200
+
+    except Exception as e:
+        logging.error(f"Erro no upload_frame: {e}")
+        return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
 # -----------------------
 # Inicialização
