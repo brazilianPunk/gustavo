@@ -228,7 +228,10 @@ def toggle_reconhecimento():
         reconhecimento_manual = not reconhecimento_manual
         logging.info(f"Reconhecimento manual: {reconhecimento_manual}")
     return redirect(url_for('index'))
-    @app.route("/upload_frame", methods=["POST"])
+
+
+# nova rota — fora da função acima!
+@app.route("/upload_frame", methods=["POST"])
 def upload_frame():
     try:
         # ler bytes da imagem enviada
