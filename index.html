@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"/>
+  <title>TCC - Reconhecimento</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 12px; }
+    .controls { margin-bottom: 12px; }
+    button { padding: 8px 12px; margin-right: 6px; }
+    #stream { border: 1px solid #ccc; }
+    .info { margin-top:10px; }
+  </style>
+</head>
+<body>
+  <h2>TCC - Reconhecimento Facial (Cloud)</h2>
+
+  <div class="controls">
+    <form action="/toggle_reconhecimento" method="post" style="display:inline;">
+      <button type="submit">Ativar / Desativar Reconhecimento</button>
+    </form>
+
+    <div style="display:inline-block; margin-left:16px;">
+      Rosto cadastrado: <strong>{{ status.registered_name or "Nenhum" }}</strong><br/>
+      Threshold: <strong>{{ status.similarity_threshold }}</strong>
+    </div>
+  </div>
+
+  <div>
+    <img id="stream" src="/video_feed" width="640" alt="stream"/>
+  </div>
+
+  <div class="info">
+    <small>Reconhecimento contínuo enquanto o botão estiver ativado.</small>
+  </div>
+</body>
+</html>
