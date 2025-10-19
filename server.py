@@ -62,13 +62,25 @@ def load_registered_embedding():
         if not public_url:
             logging.error("❌ Não foi possível obter URL pública do rosto cadastrado.")
             return False
+
         img = download_image_bgr(public_url)
-       rep = DeepFace.represent(
-    img_path=frame,
-    model_name="Facenet",
-    enforce_detection=False,
-    detector_backend="opencv"   # evita MTCNN pesado
-)[0]
+
+        rep = DeepFace.represent(
+            img_path=img,
+            model_name="Facenet",
+            enforce_detection=False,
+            detector_backend="opencv"   # evita MTCNN pesado
+        )[0]
+
+        registered_embedding = np.array(rep["embedding"], dtype=np.float32)
+        registered_name = REGISTERED_NAME
+        logging.info("✅ Embedding carregado para: %s", registered_name)
+        return True
+
+    except Exception as e:
+        logging.error("Erro ao carregar rosto cadastrado: %s", e)
+        return False
+
 
         registered_embedding = np.array(rep["embedding"], dtype=np.float32)
         registered_name = REGISTERED_NAME
