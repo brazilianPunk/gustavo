@@ -3,5 +3,5 @@ requests
 numpy
 opencv-python-headless
 supabase
-face_recognition
+face_recognition-lite
 gunicorn

@@ -5,7 +5,7 @@ import threading
 import cv2
 import numpy as np
 import requests
-import face_recognition
+from face_recognition_lite import face_recognition
 from flask import Flask, render_template, Response, request, jsonify
 from supabase import create_client
 
