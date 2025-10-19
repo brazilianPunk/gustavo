@@ -9,13 +9,18 @@ from flask import Flask, render_template, Response, request, jsonify
 from supabase import create_client
 from deepface import DeepFace
 
-# -----------------------
-# Configuração geral
-# -----------------------
+# ================================
+#   CONFIGURAÇÕES OTIMIZADAS
+# ================================
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 SUPABASE_URL = "https://udpbhizhyaesheidalho.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...."  # substitua pela sua chave
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...."  # substitua pela sua
 SUPABASE_BUCKET = "Rostos"
 REGISTERED_PATH = "capture (3).jpg"
 REGISTERED_NAME = "Gustavo"
@@ -24,20 +29,23 @@ SIMILARITY_THRESHOLD = 0.65
 app = Flask(__name__)
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-# -----------------------
-# Variáveis globais
-# -----------------------
+# ================================
+#   VARIÁVEIS GLOBAIS
+# ================================
 lock = threading.Lock()
 registered_embedding = None
 registered_name = None
 latest_frame = None
 latest_msg = "Aguardando imagem..."
-face_model = DeepFace.build_model("Facenet")
 
-# -----------------------
-# Funções auxiliares
-# -----------------------
+# Modelo leve do DeepFace
+face_model = DeepFace.build_model("VGG-Face")
+
+# ================================
+#   FUNÇÕES AUXILIARES
+# ================================
 def get_public_url(bucket, path):
+    """Gera URL pública do rosto cadastrado"""
     try:
         res = supabase.storage.from_(bucket).get_public_url(path)
         if isinstance(res, dict):
@@ -49,6 +57,7 @@ def get_public_url(bucket, path):
 
 
 def download_image_bgr(url):
+    """Baixa imagem do Supabase"""
     r = requests.get(url, timeout=10)
     r.raise_for_status()
     arr = np.asarray(bytearray(r.content), dtype=np.uint8)
@@ -56,6 +65,7 @@ def download_image_bgr(url):
 
 
 def load_registered_embedding():
+    """Carrega embedding do rosto cadastrado"""
     global registered_embedding, registered_name
     try:
         public_url = get_public_url(SUPABASE_BUCKET, REGISTERED_PATH)
@@ -64,12 +74,11 @@ def load_registered_embedding():
             return False
 
         img = download_image_bgr(public_url)
-
         rep = DeepFace.represent(
             img_path=img,
-            model_name="Facenet",
+            model_name="VGG-Face",
             enforce_detection=False,
-            detector_backend="opencv"   # evita MTCNN pesado
+            detector_backend="opencv"
         )[0]
 
         registered_embedding = np.array(rep["embedding"], dtype=np.float32)
@@ -82,33 +91,25 @@ def load_registered_embedding():
         return False
 
 
-        registered_embedding = np.array(rep["embedding"], dtype=np.float32)
-        registered_name = REGISTERED_NAME
-        logging.info("✅ Embedding carregado para: %s", registered_name)
-        return True
-    except Exception as e:
-        logging.error("Erro ao carregar rosto cadastrado: %s", e)
-        return False
-
-
 load_registered_embedding()
 
-# -----------------------
-# Rota principal
-# -----------------------
+# ================================
+#   ROTAS FLASK
+# ================================
 @app.route("/")
 def index():
+    """Página principal"""
     return render_template("index.html", status={
         "registered_name": registered_name,
         "similarity_threshold": SIMILARITY_THRESHOLD
     })
 
-# -----------------------
-# Rota para upload da ESP32
-# -----------------------
+
 @app.route("/upload_frame", methods=["POST"])
 def upload_frame():
+    """Recebe frames da ESP32-CAM"""
     global latest_frame, latest_msg
+
     try:
         file_bytes = np.frombuffer(request.data, np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
@@ -120,7 +121,13 @@ def upload_frame():
         logging.info("📸 Frame recebido da ESP32-CAM.")
 
         # Reconhecimento facial
-        rep = DeepFace.represent(img_path=frame, model_name="Facenet", enforce_detection=False)[0]
+        rep = DeepFace.represent(
+            img_path=frame,
+            model_name="VGG-Face",
+            enforce_detection=False,
+            detector_backend="opencv"
+        )[0]
+
         emb = np.array(rep["embedding"], dtype=np.float32)
         sim = np.dot(registered_embedding, emb) / (
             np.linalg.norm(registered_embedding) * np.linalg.norm(emb) + 1e-10
@@ -135,23 +142,22 @@ def upload_frame():
             color = (0, 0, 255)
             logging.warning("🚨 " + msg)
 
-        # Atualiza variáveis globais
+        # Salva último frame
         with lock:
             latest_frame = frame.copy()
             latest_msg = msg
-        time.sleep(0.5)
 
+        time.sleep(0.5)
         return jsonify({"status": "ok", "mensagem": msg}), 200
 
     except Exception as e:
         logging.error(f"Erro no upload_frame: {e}")
         return jsonify({"status": "erro", "mensagem": str(e)}), 500
 
-# -----------------------
-# Rota para exibir último frame recebido
-# -----------------------
+
 @app.route("/latest_frame")
 def latest_frame_view():
+    """Exibe o último frame recebido"""
     global latest_frame, latest_msg
     if latest_frame is None:
         blank = np.zeros((240, 320, 3), dtype=np.uint8)
@@ -164,8 +170,9 @@ def latest_frame_view():
     _, buffer = cv2.imencode(".jpg", frame_copy)
     return Response(buffer.tobytes(), mimetype="image/jpeg")
 
-# -----------------------
-# Inicialização
-# -----------------------
+
+# ================================
+#   EXECUÇÃO
+# ================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
