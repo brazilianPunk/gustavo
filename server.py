@@ -5,18 +5,13 @@ import threading
 import cv2
 import numpy as np
 import requests
+import face_recognition
 from flask import Flask, render_template, Response, request, jsonify
 from supabase import create_client
-from deepface import DeepFace
 
 # ================================
-#   CONFIGURAÇÕES OTIMIZADAS
+#   CONFIGURAÇÕES
 # ================================
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
-os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 SUPABASE_URL = "https://udpbhizhyaesheidalho.supabase.co"
@@ -24,7 +19,7 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...."  # substitua pela
 SUPABASE_BUCKET = "Rostos"
 REGISTERED_PATH = "capture (3).jpg"
 REGISTERED_NAME = "Gustavo"
-SIMILARITY_THRESHOLD = 0.65
+SIMILARITY_THRESHOLD = 0.45  # entre 0 e 1 — menor = mais sensível
 
 app = Flask(__name__)
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
@@ -33,13 +28,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 #   VARIÁVEIS GLOBAIS
 # ================================
 lock = threading.Lock()
-registered_embedding = None
+registered_encoding = None
 registered_name = None
 latest_frame = None
 latest_msg = "Aguardando imagem..."
-
-# Modelo leve do DeepFace
-face_model = DeepFace.build_model("VGG-Face")
 
 # ================================
 #   FUNÇÕES AUXILIARES
@@ -64,9 +56,9 @@ def download_image_bgr(url):
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 
-def load_registered_embedding():
-    """Carrega embedding do rosto cadastrado"""
-    global registered_embedding, registered_name
+def load_registered_face():
+    """Carrega e codifica o rosto cadastrado"""
+    global registered_encoding, registered_name
     try:
         public_url = get_public_url(SUPABASE_BUCKET, REGISTERED_PATH)
         if not public_url:
@@ -74,16 +66,16 @@ def load_registered_embedding():
             return False
 
         img = download_image_bgr(public_url)
-        rep = DeepFace.represent(
-            img_path=img,
-            model_name="VGG-Face",
-            enforce_detection=False,
-            detector_backend="opencv"
-        )[0]
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        encodings = face_recognition.face_encodings(rgb_img)
 
-        registered_embedding = np.array(rep["embedding"], dtype=np.float32)
+        if not encodings:
+            logging.error("❌ Nenhum rosto detectado na imagem cadastrada.")
+            return False
+
+        registered_encoding = encodings[0]
         registered_name = REGISTERED_NAME
-        logging.info("✅ Embedding carregado para: %s", registered_name)
+        logging.info("✅ Rosto cadastrado com sucesso: %s", registered_name)
         return True
 
     except Exception as e:
@@ -91,7 +83,7 @@ def load_registered_embedding():
         return False
 
 
-load_registered_embedding()
+load_registered_face()
 
 # ================================
 #   ROTAS FLASK
@@ -120,34 +112,29 @@ def upload_frame():
 
         logging.info("📸 Frame recebido da ESP32-CAM.")
 
-        # Reconhecimento facial
-        rep = DeepFace.represent(
-            img_path=frame,
-            model_name="VGG-Face",
-            enforce_detection=False,
-            detector_backend="opencv"
-        )[0]
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        faces = face_recognition.face_locations(rgb)
+        encodings = face_recognition.face_encodings(rgb, faces)
 
-        emb = np.array(rep["embedding"], dtype=np.float32)
-        sim = np.dot(registered_embedding, emb) / (
-            np.linalg.norm(registered_embedding) * np.linalg.norm(emb) + 1e-10
-        )
+        msg = "Nenhum rosto detectado"
+        color = (0, 0, 255)
 
-        if sim >= SIMILARITY_THRESHOLD:
-            msg = f"Acesso Permitido ({registered_name}) {sim:.2f}"
-            color = (0, 255, 0)
-            logging.info("✅ " + msg)
-        else:
-            msg = f"Desconhecido ({sim:.2f})"
-            color = (0, 0, 255)
-            logging.warning("🚨 " + msg)
+        for encoding in encodings:
+            distance = face_recognition.face_distance([registered_encoding], encoding)[0]
+            if distance <= SIMILARITY_THRESHOLD:
+                msg = f"Acesso Permitido ({registered_name})"
+                color = (0, 255, 0)
+                logging.info("✅ %s - distância %.2f", msg, distance)
+            else:
+                msg = f"Desconhecido (distância {distance:.2f})"
+                logging.warning("🚨 %s", msg)
 
-        # Salva último frame
+        # Salva o último frame para visualização
         with lock:
             latest_frame = frame.copy()
             latest_msg = msg
 
-        time.sleep(0.5)
+        time.sleep(0.3)
         return jsonify({"status": "ok", "mensagem": msg}), 200
 
     except Exception as e:
