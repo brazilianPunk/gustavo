@@ -127,6 +127,7 @@ def upload_frame():
         with lock:
             latest_frame = frame.copy()
             latest_msg = msg
+        time.sleep(0.5)
 
         return jsonify({"status": "ok", "mensagem": msg}), 200
 
