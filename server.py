@@ -5,12 +5,12 @@ import threading
 import cv2
 import numpy as np
 import requests
-from face_recognition_lite import face_recognition
+
 from flask import Flask, render_template, Response, request, jsonify
 from supabase import create_client
 
 # ================================
-#   CONFIGURAÇÕES
+# CONFIGURAÇÃO GERAL
 # ================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -19,25 +19,28 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...."  # substitua pela
 SUPABASE_BUCKET = "Rostos"
 REGISTERED_PATH = "capture (3).jpg"
 REGISTERED_NAME = "Gustavo"
-SIMILARITY_THRESHOLD = 0.45  # entre 0 e 1 — menor = mais sensível
+
+SIMILARITY_THRESHOLD = 0.65
 
 app = Flask(__name__)
 supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 # ================================
-#   VARIÁVEIS GLOBAIS
+# VARIÁVEIS GLOBAIS
 # ================================
 lock = threading.Lock()
-registered_encoding = None
+registered_face = None
 registered_name = None
 latest_frame = None
 latest_msg = "Aguardando imagem..."
 
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
 # ================================
-#   FUNÇÕES AUXILIARES
+# FUNÇÕES AUXILIARES
 # ================================
 def get_public_url(bucket, path):
-    """Gera URL pública do rosto cadastrado"""
+
     try:
         res = supabase.storage.from_(bucket).get_public_url(path)
         if isinstance(res, dict):
@@ -57,25 +60,26 @@ def download_image_bgr(url):
 
 
 def load_registered_face():
-    """Carrega e codifica o rosto cadastrado"""
-    global registered_encoding, registered_name
+    """Carrega o rosto cadastrado"""
+    global registered_face, registered_name
     try:
         public_url = get_public_url(SUPABASE_BUCKET, REGISTERED_PATH)
         if not public_url:
-            logging.error("❌ Não foi possível obter URL pública do rosto cadastrado.")
+            logging.error("❌ Falha ao obter URL pública.")
             return False
 
         img = download_image_bgr(public_url)
-        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        encodings = face_recognition.face_encodings(rgb_img)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-        if not encodings:
-            logging.error("❌ Nenhum rosto detectado na imagem cadastrada.")
+        if len(faces) == 0:
+            logging.error("❌ Nenhum rosto encontrado na imagem cadastrada.")
             return False
 
-        registered_encoding = encodings[0]
+        (x, y, w, h) = faces[0]
+        registered_face = gray[y:y+h, x:x+w]
         registered_name = REGISTERED_NAME
-        logging.info("✅ Rosto cadastrado com sucesso: %s", registered_name)
+        logging.info("✅ Rosto cadastrado: %s", registered_name)
         return True
 
     except Exception as e:
@@ -86,11 +90,11 @@ def load_registered_face():
 load_registered_face()
 
 # ================================
-#   ROTAS FLASK
+# ROTAS FLASK
 # ================================
 @app.route("/")
 def index():
-    """Página principal"""
+
     return render_template("index.html", status={
         "registered_name": registered_name,
         "similarity_threshold": SIMILARITY_THRESHOLD
@@ -99,37 +103,42 @@ def index():
 
 @app.route("/upload_frame", methods=["POST"])
 def upload_frame():
-    """Recebe frames da ESP32-CAM"""
+
     global latest_frame, latest_msg
 
     try:
         file_bytes = np.frombuffer(request.data, np.uint8)
         frame = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
+        
         if frame is None:
-            logging.error("❌ Frame inválido recebido.")
-            return jsonify({"status": "erro", "mensagem": "frame inválido"}), 400
+            return jsonify({"status": "erro", "mensagem": "Frame inválido"}), 400
 
-        logging.info("📸 Frame recebido da ESP32-CAM.")
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        faces = face_recognition.face_locations(rgb)
-        encodings = face_recognition.face_encodings(rgb, faces)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
         msg = "Nenhum rosto detectado"
         color = (0, 0, 255)
 
-        for encoding in encodings:
-            distance = face_recognition.face_distance([registered_encoding], encoding)[0]
-            if distance <= SIMILARITY_THRESHOLD:
+        for (x, y, w, h) in faces:
+            roi = gray[y:y+h, x:x+w]
+            roi_resized = cv2.resize(roi, (registered_face.shape[1], registered_face.shape[0]))
+
+            # comparação de histograma
+            hist_ref = cv2.calcHist([registered_face], [0], None, [256], [0, 256])
+            hist_roi = cv2.calcHist([roi_resized], [0], None, [256], [0, 256])
+            similarity = cv2.compareHist(hist_ref, hist_roi, cv2.HISTCMP_CORREL)
+
+            if similarity >= SIMILARITY_THRESHOLD:
                 msg = f"Acesso Permitido ({registered_name})"
                 color = (0, 255, 0)
-                logging.info("✅ %s - distância %.2f", msg, distance)
+                logging.info("✅ Rosto reconhecido: similaridade %.2f", similarity)
             else:
-                msg = f"Desconhecido (distância {distance:.2f})"
-                logging.warning("🚨 %s", msg)
+                msg = f"Desconhecido ({similarity:.2f})"
+                color = (0, 0, 255)
 
-        # Salva o último frame para visualização
+            cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+            cv2.putText(frame, msg, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
         with lock:
             latest_frame = frame.copy()
             latest_msg = msg
@@ -144,22 +153,18 @@ def upload_frame():
 
 @app.route("/latest_frame")
 def latest_frame_view():
-    """Exibe o último frame recebido"""
     global latest_frame, latest_msg
     if latest_frame is None:
         blank = np.zeros((240, 320, 3), dtype=np.uint8)
         _, buffer = cv2.imencode(".jpg", blank)
         return Response(buffer.tobytes(), mimetype="image/jpeg")
 
-    frame_copy = latest_frame.copy()
-    cv2.putText(frame_copy, latest_msg, (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    _, buffer = cv2.imencode(".jpg", frame_copy)
+    _, buffer = cv2.imencode(".jpg", latest_frame)
     return Response(buffer.tobytes(), mimetype="image/jpeg")
 
 
 # ================================
-#   EXECUÇÃO
+# EXECUÇÃO
 # ================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
